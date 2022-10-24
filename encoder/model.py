@@ -247,38 +247,62 @@ class Encoder(nn.Module):
             
         return loss, eer
 
-    def compute(self, games):
+    def compute(self, games, max_tick):
         """
-        Computes the embeddings of a batch of games.
+        Computes the embeddings for batch of games in a round
 
         :param games: batch of games of same duration as a tensor of shape
         (batch_size, n_frames, 34, 8, 8) -> (n_frames, 34, 8, 8)
         :return: the embeddings as a tensor of shape (batch_size, embedding_size)
         """
+        agg_game_vectors = torch.tensor([])
 
-        game_features = []
-        #2 * 3 * (2 * 26)
-        row1 = [[games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]]]
-        row2 = [[games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]]]
-        rows = [row1, row2]
-        torch_row = torch.tensor(rows)
+        for tick in max_tick:
+            #for a single game
+            game_features = []
+            #2 * 3 * (2 * 26)
+            #number of ticks for a player * 3 (workers) * (2 * 26)
+            # row1 = [[games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]]]
+            # row2 = [[games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]]]
+            # rows = [row1, row2]
+            rows = []
+            for i in range (tick):
+                row = [[games.iloc[i*3,:],games.iloc[i*3,:]], [games.iloc[i*3+1,:],games.iloc[i*3+1,:]], [games.iloc[i*3+2,:],games.iloc[i*3+2,:]]]
+                rows.append(row)
+            torch_row = torch.tensor(rows)
+            #print(torch_row.size())
 
-        # print(torch_row.size())
-        cnn_out = self.cnn(torch_row)
-        game_features.append(cnn_out.unsqueeze(0))
-        game_features = torch.cat(game_features, dim=0)
-        print(game_features.size())
+            cnn_out = self.cnn(torch_row)
+            game_features.append(cnn_out.unsqueeze(0))
+            game_features = torch.cat(game_features, dim=0)
+            #print(game_features.size())
 
-        embeds_raw = self.transformer(game_features)
-        embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
+            embeds_raw = self.transformer(game_features)
+            embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
+            agg_game_vectors = torch.cat((agg_game_vectors, embeds), dim=0)
 
-        return embeds
+        return agg_game_vectors
 
-df = pd.read_csv("trace.csv")
-df = df[df['round']==1]
-df = df.drop(columns=['round', 'simplified_action', 'ResponseId'])
-df = df.astype(np.float32)
+def computeEmbedding(round):
+    #input is round no. and output is a list of game vectors in that round
+    df = pd.read_csv("trace.csv")
+    df = df[df['round']==round]
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = Encoder(device)
-print(model.compute(df))
+    #max tick for a player
+    max_tick = df.groupby('ResponseId').agg(max).reset_index()['tick']
+    df = df.drop(columns=['round', 'simplified_action', 'ResponseId'])
+    df = df.astype(np.float32)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = Encoder(device)
+
+    game_vectors_round = model.compute(df, max_tick)
+    return game_vectors_round
+
+round1 = computeEmbedding(1)
+round2 = computeEmbedding(2)
+vectors = torch.cat((round1,round2), dim=0)
+# vectors = torch.cat((vectors,round3), dim=0)
+print(vectors.size())
+
+torch.save(vectors, 'tensor.pt')
