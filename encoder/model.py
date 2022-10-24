@@ -1,19 +1,11 @@
 from encoder.params_model import *
-from encoder.params_data import *
-from scipy.interpolate import interp1d
-from sklearn.metrics import roc_curve
-from torch.nn.utils import clip_grad_norm_
-from scipy.optimize import brentq
 from collections import OrderedDict
 from torch import nn
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
-import numpy as np
 import torch
 from encoder.transformer import ViT
 import pandas as pd
 import numpy as np
-import seaborn as sns                       #visualisation
-import matplotlib.pyplot as plt             #visualisation
+import seaborn as sns
 sns.set(color_codes=True)
 
 class ConvBlock(nn.Sequential):
@@ -109,176 +101,38 @@ class Encoder(nn.Module):
                                pool='mean', 
                                dropout=0., 
                                emb_dropout=0.)
-        
-        # Cosine similarity scaling (with fixed initial parameter values)
-        self.similarity_weight = nn.Parameter(torch.tensor([10.])) 
-        self.similarity_bias = nn.Parameter(torch.tensor([-5.]))
-
-        # Loss
-        # self.loss_fn = nn.CrossEntropyLoss()
-        self.loss_fn = self.GE2E_softmax_loss
-
-    def GE2E_softmax_loss(self, sim_matrix, players_per_batch, games_per_player):
-        
-        # colored entries in paper
-        sim_matrix_correct = torch.cat([sim_matrix[i*games_per_player:(i+1)*games_per_player, i:(i+1)] for i in range(players_per_batch)])
-        # softmax loss
-        loss = -torch.sum(sim_matrix_correct-torch.log(torch.sum(torch.exp(sim_matrix), axis=1, keepdim=True) + 1e-6)) / (players_per_batch*games_per_player)
-        return loss
-
-    def do_gradient_ops(self):
-        # Gradient scale
-        self.similarity_weight.grad *= 0.01
-        self.similarity_bias.grad *= 0.01
-            
-        # Gradient clipping
-        clip_grad_norm_(self.parameters(), 3, norm_type=2)
-    
-    def forward(self, games):
-        """
-        Computes the embeddings of a batch of games.
-        
-        :param games: batch of games of same duration as a tensor of shape 
-        (batch_size, n_frames, 34, 8, 8)
-        :return: the embeddings as a tensor of shape (batch_size, embedding_size)
-        """
-
-        # game_features = []
-
-        # for i in range(games.shape[0]):
-        #     cnn_out = self.cnn(games[i])
-        #     game_features.append(cnn_out.unsqueeze(0))
-        
-        # game_features = torch.cat(game_features, dim=0)
-
-        batch_size, n_frames, feature_shape = games.shape[0], games.shape[1], games.shape[2:]
-        
-        #  (batch_size, n_frames, 34, 8, 8) -> (batch_size*n_frames, 34, 8, 8)
-        games = torch.reshape(games, (batch_size*n_frames, *feature_shape))
-
-        # (batch_size*n_frames, cnn_out_features)
-        game_features = self.cnn(games)
-
-        # (batch_size*n_frames, cnn_out_features) -> (batch_size, n_frames, cnn_out_features)
-        game_features = torch.reshape(game_features, (batch_size, n_frames, game_features.shape[-1]))
-
-        # Pass the input into transformer
-        # (batch_size, n_frames, n_features) 
-        embeds_raw = self.transformer(game_features)
-        # self.lstm.flatten_parameters()
-
-        # L2-normalize it
-        embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
-        
-        return embeds
-    
-    def similarity_matrix(self, embeds):
-        """
-        Computes the similarity matrix according the section 2.1 of GE2E.
-
-        :param embeds: the embeddings as a tensor of shape (players_per_batch, 
-        games_per_player, embedding_size)
-        :return: the similarity matrix as a tensor of shape (players_per_batch,
-        games_per_player, players_per_batch)
-        """
-        players_per_batch, games_per_player = embeds.shape[:2]
-        
-        # Inclusive centroids (1 per speaker). Cloning is needed for reverse differentiation
-        centroids_incl = torch.mean(embeds, dim=1, keepdim=True)
-        centroids_incl = centroids_incl.clone() / torch.norm(centroids_incl, dim=2, keepdim=True)
-
-        # Exclusive centroids (1 per utterance)
-        centroids_excl = (torch.sum(embeds, dim=1, keepdim=True) - embeds)
-        centroids_excl /= (games_per_player - 1)
-        centroids_excl = centroids_excl.clone() / torch.norm(centroids_excl, dim=2, keepdim=True)
-
-        # Similarity matrix. The cosine similarity of already 2-normed vectors is simply the dot
-        # product of these vectors (which is just an element-wise multiplication reduced by a sum).
-        # We vectorize the computation for efficiency.
-        sim_matrix = torch.zeros(players_per_batch, games_per_player,
-                                 players_per_batch).to(self.loss_device)
-        mask_matrix = 1 - np.eye(players_per_batch, dtype=np.int)
-        for j in range(players_per_batch):
-            mask = np.where(mask_matrix[j])[0]
-            sim_matrix[mask, :, j] = (embeds[mask] * centroids_incl[j]).sum(dim=2)
-            sim_matrix[j, :, j] = (embeds[j] * centroids_excl[j]).sum(dim=1)
-        
-        ## Even more vectorized version (slower maybe because of transpose)
-        # sim_matrix2 = torch.zeros(speakers_per_batch, speakers_per_batch, utterances_per_speaker
-        #                           ).to(self.loss_device)
-        # eye = np.eye(speakers_per_batch, dtype=np.int)
-        # mask = np.where(1 - eye)
-        # sim_matrix2[mask] = (embeds[mask[0]] * centroids_incl[mask[1]]).sum(dim=2)
-        # mask = np.where(eye)
-        # sim_matrix2[mask] = (embeds * centroids_excl).sum(dim=2)
-        # sim_matrix2 = sim_matrix2.transpose(1, 2)
-        
-        sim_matrix = sim_matrix * self.similarity_weight + self.similarity_bias
-        return sim_matrix
-    
-    def loss(self, embeds):
-        """
-        Computes the softmax loss according the section 2.1 of GE2E.
-        
-        :param embeds: the embeddings as a tensor of shape (players_per_batch, 
-        games_per_player, embedding_size)
-        :return: the loss and the EER for this batch of embeddings.
-        """
-        players_per_batch, games_per_player = embeds.shape[:2]
-        
-        # Loss
-        sim_matrix = self.similarity_matrix(embeds)
-        sim_matrix = sim_matrix.reshape((players_per_batch * games_per_player, 
-                                         players_per_batch))
-        ground_truth = np.repeat(np.arange(players_per_batch), games_per_player)
-        # target = torch.from_numpy(ground_truth).long().to(self.loss_device)
-        # loss = self.loss_fn(sim_matrix, target)
-        loss = self.loss_fn(sim_matrix, players_per_batch, games_per_player)
-
-        # EER (not backpropagated)
-        with torch.no_grad():
-            inv_argmax = lambda i: np.eye(1, players_per_batch, i, dtype=np.int)[0]
-            labels = np.array([inv_argmax(i) for i in ground_truth])
-            preds = sim_matrix.detach().cpu().numpy()
-
-            # Snippet from https://yangcha.github.io/EER-ROC/
-            fpr, tpr, thresholds = roc_curve(labels.flatten(), preds.flatten())           
-            eer = brentq(lambda x: 1. - x - interp1d(fpr, tpr)(x), 0., 1.)
-            
-        return loss, eer
 
     def compute(self, games, max_tick):
         """
-        Computes the embeddings for batch of games in a round
-
-        :param games: batch of games of same duration as a tensor of shape
-        (batch_size, n_frames, 34, 8, 8) -> (n_frames, 34, 8, 8)
-        :return: the embeddings as a tensor of shape (batch_size, embedding_size)
+        Computes the embeddings for a batch of games in a round
+        :param games: game features data frame for a round (with 170 unique ResponseIds)
+        :return: the embeddings as a tensor of shape (number of games, embedding_size=512)
         """
         agg_game_vectors = torch.tensor([])
 
         for tick in max_tick:
             #for a single game
-            game_features = []
             #2 * 3 * (2 * 26)
             #number of ticks for a player * 3 (workers) * (2 * 26)
             # row1 = [[games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]]]
             # row2 = [[games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]]]
             # rows = [row1, row2]
+            game_features = []
             rows = []
             for i in range (tick):
                 row = [[games.iloc[i*3,:],games.iloc[i*3,:]], [games.iloc[i*3+1,:],games.iloc[i*3+1,:]], [games.iloc[i*3+2,:],games.iloc[i*3+2,:]]]
                 rows.append(row)
             torch_row = torch.tensor(rows)
-            #print(torch_row.size())
+            print(torch_row.size())
 
             cnn_out = self.cnn(torch_row)
             game_features.append(cnn_out.unsqueeze(0))
             game_features = torch.cat(game_features, dim=0)
-            #print(game_features.size())
+            print(game_features.size())
 
             embeds_raw = self.transformer(game_features)
             embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
+            print(embeds.size())
             agg_game_vectors = torch.cat((agg_game_vectors, embeds), dim=0)
 
         return agg_game_vectors
@@ -299,10 +153,11 @@ def computeEmbedding(round):
     game_vectors_round = model.compute(df, max_tick)
     return game_vectors_round
 
-round1 = computeEmbedding(1)
-round2 = computeEmbedding(2)
-vectors = torch.cat((round1,round2), dim=0)
-# vectors = torch.cat((vectors,round3), dim=0)
-print(vectors.size())
+if __name__ == "__main__":
+    round1 = computeEmbedding(1)
+    round2 = computeEmbedding(2)
+    vectors = torch.cat((round1,round2), dim=0)
+    # vectors = torch.cat((vectors,round3), dim=0)
+    print(vectors.size())
 
-torch.save(vectors, 'tensor.pt')
+    torch.save(vectors, 'tensor.pt')
