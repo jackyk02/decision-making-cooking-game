@@ -6,7 +6,9 @@ from encoder.transformer import ViT
 import pandas as pd
 import numpy as np
 import seaborn as sns
+
 sns.set(color_codes=True)
+
 
 class ConvBlock(nn.Sequential):
     def __init__(self, in_channels, out_channels, kernel_size, padding=0):
@@ -15,6 +17,7 @@ class ConvBlock(nn.Sequential):
             ('bn', nn.BatchNorm2d(out_channels)),
             ('relu', nn.ReLU(inplace=True)),
         ]))
+
 
 class SqueezeExcitation(nn.Module):
     def __init__(self, channels, ratio):
@@ -39,6 +42,7 @@ class SqueezeExcitation(nn.Module):
 
         x = scale.sigmoid() * x_in + shift
         return x
+
 
 class ResidualBlock(nn.Module):
     def __init__(self, channels, se_ratio):
@@ -66,16 +70,17 @@ class ResidualBlock(nn.Module):
         x = self.relu2(x)
         return x
 
+
 class Encoder(nn.Module):
 
     def __init__(self, loss_device):
         super().__init__()
         self.loss_device = loss_device
-        
+
         channels = residual_channels
 
         self.conv_block = ConvBlock(3, channels, 3, padding=1)
-        blocks = [(f'block{i+1}', ResidualBlock(channels, se_ratio)) for i in range(residual_blocks)]
+        blocks = [(f'block{i + 1}', ResidualBlock(channels, se_ratio)) for i in range(residual_blocks)]
         self.residual_stack = nn.Sequential(OrderedDict(blocks))
 
         self.conv_block2 = ConvBlock(channels, channels, 3, padding=1)
@@ -92,14 +97,14 @@ class Encoder(nn.Module):
         ])
 
         # Network defition
-        self.transformer = ViT(input_dim=4160, #input dimension
-                               output_dim=model_embedding_size, 
+        self.transformer = ViT(input_dim=1600,  # input dimension
+                               output_dim=model_embedding_size,
                                dim=2,
-                               depth=12, 
-                               heads=8, 
-                               mlp_dim=2048, 
-                               pool='mean', 
-                               dropout=0., 
+                               depth=12,
+                               heads=8,
+                               mlp_dim=2048,
+                               pool='mean',
+                               dropout=0.,
                                emb_dropout=0.)
 
     def compute(self, games, max_tick):
@@ -111,41 +116,52 @@ class Encoder(nn.Module):
         agg_game_vectors = torch.tensor([])
 
         for tick in max_tick:
-            #for a single game
-            #2 * 3 * (2 * 26)
-            #number of ticks for a player * 3 (workers) * (2 * 26)
+            # for a single game
+            # 2 * 3 * (2 * 26)
+            # number of ticks for a player * 2 (workers) * (2 * 26)
             # row1 = [[games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]]]
             # row2 = [[games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]], [games.iloc[0,:],games.iloc[0,:]]]
             # rows = [row1, row2]
             game_features = []
             rows = []
-            for i in range (tick):
-                row = [[games.iloc[i*3,:],games.iloc[i*3,:]], [games.iloc[i*3+1,:],games.iloc[i*3+1,:]], [games.iloc[i*3+2,:],games.iloc[i*3+2,:]]]
+            for i in range(tick):
+                row = [[games.iloc[i * 3, :], games.iloc[i * 3, :]],
+                       [games.iloc[i * 3 + 1, :], games.iloc[i * 3 + 1, :]],
+                       [games.iloc[i * 3 + 2, :], games.iloc[i * 3 + 2, :]]]
                 rows.append(row)
             torch_row = torch.tensor(rows)
-            print(torch_row.size())
+            # print(torch_row.size())
 
             cnn_out = self.cnn(torch_row)
             game_features.append(cnn_out.unsqueeze(0))
             game_features = torch.cat(game_features, dim=0)
-            print(game_features.size())
+            # print(game_features.size())
 
             embeds_raw = self.transformer(game_features)
             embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
-            print(embeds.size())
+            # print(embeds.size())
             agg_game_vectors = torch.cat((agg_game_vectors, embeds), dim=0)
 
         return agg_game_vectors
 
-def computeEmbedding(round):
-    #input is round no. and output is a list of game vectors in that round
-    df = pd.read_csv("trace.csv")
-    df = df[df['round']==round]
 
-    #max tick for a player
+def computeEmbedding(round):
+    # input is round no. and output is a list of game vectors in that round
+    df = pd.read_csv("trace.csv")
+    df = df[df['round'] == round]
+
+    # max tick for a player
     max_tick = df.groupby('ResponseId').agg(max).reset_index()['tick']
-    df = df.drop(columns=['round', 'simplified_action', 'ResponseId'])
+    df = df.drop(columns=['round', 'original_action', 'simplified_action', 'ResponseId', 't0'])
+    ot_list = ['o0t0', 'o0t1', 'o0t2', 'o1t0', 'o1t1', 'o1t2', 'o2t0', 'o2t1', 'o2t2', 'o3t0', 'o3t1', 'o3t2']
+    df['ot_sum'] = df[ot_list].sum(axis=1)
+    df = df.drop(columns=ot_list)
+    ct_list = ['ct0', 'ct1', 'ct2', 'ct3']
+    df['ct_sum'] = df[ct_list].sum(axis=1)
+    df = df.drop(columns=ct_list)
+    #df = df.drop(columns=['round', 'simplified_action', 'ResponseId'])
     df = df.astype(np.float32)
+    print(df.head(5))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = Encoder(device)
@@ -153,11 +169,15 @@ def computeEmbedding(round):
     game_vectors_round = model.compute(df, max_tick)
     return game_vectors_round
 
-if __name__ == "__main__":
-    round1 = computeEmbedding(1)
-    # round2 = computeEmbedding(2)
-    # vectors = torch.cat((round1,round2), dim=0)
-    # vectors = torch.cat((vectors,round3), dim=0)
-    # print(vectors.size())
 
-    torch.save(round1, 'round1.pt')
+if __name__ == "__main__":
+    feature = computeEmbedding(3)
+    print(feature)
+    feature = torch.round(feature, decimals = 6)
+    #round6 = computeEmbedding(4)
+    #vectors = torch.cat((round5, round6), dim=0)
+    #print(vectors.size())
+    #t = feature.detach().numpy()
+    #tf = pd.DataFrame(t)
+    #tf.to_csv('feature_round3.csv', index = False)
+    torch.save(feature, 'round3.pt')
