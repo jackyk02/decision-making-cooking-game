@@ -175,6 +175,7 @@ def computeEmbedding(round):
     df = df.astype(np.float32)
     print(df.head(5))
 
+    torch.manual_seed(100)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = Encoder(device)
 
@@ -185,7 +186,7 @@ def computeEmbedding(round):
 if __name__ == "__main__":
     feature = computeEmbedding(3)
     print(feature)
-    feature = torch.round(feature, decimals=6)
+    # feature = torch.round(feature, decimals=7)
     #round6 = computeEmbedding(4)
     #vectors = torch.cat((round5, round6), dim=0)
     #print(vectors.size())
