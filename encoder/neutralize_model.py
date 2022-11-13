@@ -79,7 +79,7 @@ class Encoder(nn.Module):
 
         channels = residual_channels
 
-        self.conv_block = ConvBlock(3, channels, 3, padding=1)
+        self.conv_block = ConvBlock(2, channels, 3, padding=1)
         blocks = [(f'block{i + 1}', ResidualBlock(channels, se_ratio)) for i in range(residual_blocks)]
         self.residual_stack = nn.Sequential(OrderedDict(blocks))
 
@@ -96,8 +96,15 @@ class Encoder(nn.Module):
             torch.nn.Flatten()
         ])
 
+        def init_weights(m):
+            if isinstance(m, nn.Conv2d):
+                torch.nn.init.xavier_uniform_(m.weight)
+                m.weight.data.fill_(0.1)
+
+        self.cnn.apply(init_weights)
+
         # Network defition
-        self.transformer = ViT(input_dim=1600,  # input dimension
+        self.transformer = ViT(input_dim=1280,  # input dimension
                                output_dim=model_embedding_size,
                                dim=2,
                                depth=12,
@@ -125,9 +132,8 @@ class Encoder(nn.Module):
             game_features = []
             rows = []
             for i in range(tick):
-                row = [[games.iloc[i * 3, :], games.iloc[i * 3, :]],
-                       [games.iloc[i * 3 + 1, :], games.iloc[i * 3 + 1, :]],
-                       [games.iloc[i * 3 + 2, :], games.iloc[i * 3 + 2, :]]]
+                row = [[games.iloc[i * 2, :], games.iloc[i * 2, :]],
+                       [games.iloc[i * 2 + 1, :], games.iloc[i * 2 + 1, :]]]
                 rows.append(row)
             torch_row = torch.tensor(rows)
             # print(torch_row.size())
@@ -149,17 +155,23 @@ def computeEmbedding(round):
     # input is round no. and output is a list of game vectors in that round
     df = pd.read_csv("trace.csv")
     df = df[df['round'] == round]
+    df = df[np.invert(df['simplified_action'].isnull())]
 
     # max tick for a player
     max_tick = df.groupby('ResponseId').agg(max).reset_index()['tick']
-    df = df.drop(columns=['round', 'original_action', 'simplified_action', 'ResponseId', 't0'])
+    df = df.drop(columns=['round', 'original_action', 'ResponseId', 't0'])
     ot_list = ['o0t0', 'o0t1', 'o0t2', 'o1t0', 'o1t1', 'o1t2', 'o2t0', 'o2t1', 'o2t2', 'o3t0', 'o3t1', 'o3t2']
     df['ot_sum'] = df[ot_list].sum(axis=1)
     df = df.drop(columns=ot_list)
+
     ct_list = ['ct0', 'ct1', 'ct2', 'ct3']
     df['ct_sum'] = df[ct_list].sum(axis=1)
     df = df.drop(columns=ct_list)
-    #df = df.drop(columns=['round', 'simplified_action', 'ResponseId'])
+
+    os_list = ['os0', 'os1', 'os2', 'os3']
+    df['os_sum'] = df[os_list].sum(axis=1)
+    df = df.drop(columns=os_list)
+
     df = df.astype(np.float32)
     print(df.head(5))
 
@@ -173,11 +185,11 @@ def computeEmbedding(round):
 if __name__ == "__main__":
     feature = computeEmbedding(3)
     print(feature)
-    feature = torch.round(feature, decimals = 6)
+    feature = torch.round(feature, decimals=6)
     #round6 = computeEmbedding(4)
     #vectors = torch.cat((round5, round6), dim=0)
     #print(vectors.size())
-    #t = feature.detach().numpy()
-    #tf = pd.DataFrame(t)
-    #tf.to_csv('feature_round3.csv', index = False)
+    t = feature.detach().numpy()
+    tf = pd.DataFrame(t)
+    tf.to_csv('feature_round3.csv', index = False)
     torch.save(feature, 'round3.pt')

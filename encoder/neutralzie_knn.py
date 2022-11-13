@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 full_dataset = np.array(torch.load('round3.pt').tolist())
 
-kmeans = KMeans(n_clusters=5, random_state=0).fit(full_dataset)
+kmeans = KMeans(n_clusters=3, random_state=0).fit(full_dataset)
 
 res = kmeans.labels_
 count = 3
