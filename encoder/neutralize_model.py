@@ -184,13 +184,14 @@ def computeEmbedding(round):
 
 
 if __name__ == "__main__":
-    feature = computeEmbedding(3)
+    round = 3
+    feature = computeEmbedding(round)
     print(feature)
     # feature = torch.round(feature, decimals=7)
     #round6 = computeEmbedding(4)
     #vectors = torch.cat((round5, round6), dim=0)
     #print(vectors.size())
-    t = feature.detach().numpy()
-    tf = pd.DataFrame(t)
-    tf.to_csv('feature_round3.csv', index = False)
-    torch.save(feature, 'round3.pt')
+    # t = feature.detach().numpy()
+    # tf = pd.DataFrame(t)
+    # tf.to_csv('feature_round3.csv', index = False)
+    torch.save(feature, 'round' +  str(round) +'.pt')
