@@ -12,7 +12,7 @@ for i in range (3, 7):
     # print(load_model)
     full_dataset = full_dataset+ torch.load(load_model).tolist()
 
-kmeans = KMeans(n_clusters=10, random_state=42).fit(full_dataset)
+kmeans = KMeans(n_clusters=4, random_state=42).fit(full_dataset)
 
 res = kmeans.labels_
 print(res)
