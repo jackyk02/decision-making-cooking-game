@@ -8,8 +8,8 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 full_dataset = []
 
-for i in range (6, 7):
-    load_model = 'round'+str(i)+'.pt'
+for i in range (5, 6):
+    load_model = 'phase2_round'+str(i)+'.pt'
     # print(load_model)
     full_dataset = full_dataset+ torch.load(load_model).tolist()
 
@@ -61,7 +61,7 @@ def follow_round12_baseline_tip(res_id, df):
 
 
 def analyzeTipCompliance():
-    round = 6
+    round = 5
     tip_name = ['algorithm_tip', 'human_tip', 'baseline_tip', 'unshown_tip']
     df = pd.read_csv('data.csv')
     df = df[df['round'] == round]
@@ -92,9 +92,6 @@ def analyzeTipCompliance():
             if tip_count[i] == max(tip_count):
                 max_tip.append(tip_name[i])
         print('max tip: ', max_tip, ' with compliance rate ' + str(max_pct) + '%')
-
-
-
 
 analyzeTipCompliance()
 

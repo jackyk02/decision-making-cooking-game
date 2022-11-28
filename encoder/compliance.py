@@ -32,8 +32,6 @@ def follow_unshown_tip(res_id, round, df):
     cnt = tmp.value_counts()[1] if 1 in tmp.value_counts() else 0
     return cnt == 1
 
-
-
 def getCompliance(round):
     df = pd.read_csv("data.csv")
     agg_df = df[df['round'] == round].groupby('ResponseId').agg(max)['treatment'].reset_index()
@@ -59,6 +57,6 @@ def getCompliance(round):
     print(unshown_tip)
 
 
-# getCompliance(6)
+getCompliance(6)
 # df = pd.read_csv("data.csv")
 # print(follow_algorithm_tip('R_09f8RCjNyCadwPv', 6, df))
