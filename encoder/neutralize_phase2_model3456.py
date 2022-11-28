@@ -79,7 +79,7 @@ class Encoder(nn.Module):
 
         channels = residual_channels
 
-        self.conv_block = ConvBlock(3, channels, 3, padding=1)
+        self.conv_block = ConvBlock(2, channels, 3, padding=1)
         blocks = [(f'block{i + 1}', ResidualBlock(channels, se_ratio)) for i in range(residual_blocks)]
         self.residual_stack = nn.Sequential(OrderedDict(blocks))
 
@@ -132,9 +132,8 @@ class Encoder(nn.Module):
             game_features = []
             rows = []
             for i in range(tick):
-                row = [[games.iloc[i * 3, :], games.iloc[i * 3, :]],
-                       [games.iloc[i * 3 + 1, :], games.iloc[i * 3 + 1, :]],
-                       [games.iloc[i * 3 + 2, :], games.iloc[i * 3 + 2, :]]]
+                row = [[games.iloc[i * 2, :], games.iloc[i * 2, :]],
+                       [games.iloc[i * 2 + 1, :], games.iloc[i * 2 + 1, :]]]
                 rows.append(row)
             torch_row = torch.tensor(rows)
             # print(torch_row.size())
@@ -161,14 +160,14 @@ def computeEmbedding(round):
     # max tick for a player
     max_tick = df.groupby('ResponseId').agg(max).reset_index()['tick']
     treatment = df['treatment']
-    df = df.drop(columns=['treatment', 'round', 'worker', 'oid', 'ResponseId', 'completed'])
+    df = df.drop(columns=['treatment', 'round', 'worker', 'oid', 't0', 'ResponseId', 'completed', 't0_0', 't0_1', 't0_2'])
 
     nt_list = ['nt0_0', 'nt0_1', 'nt0_2', 'nt0_3', 'nt1_0', 'nt1_1', 'nt1_2', 'nt1_3', 'nt2_0', 'nt2_1', 'nt2_2',
                'nt2_3']
     df['nt_sum'] = df[nt_list].sum(axis=1)
     df = df.drop(columns=nt_list)
 
-    ct_list = ['t0_0', 't0_1', 't0_2', 't1_0', 't1_1', 't1_2', 't2_0', 't2_1', 't2_2', 't0_3', 't1_3', 't2_3']
+    ct_list = ['t1_0', 't1_1', 't1_2', 't2_0', 't2_1', 't2_2', 't0_3', 't1_3', 't2_3']
     df['t_sum'] = df[ct_list].sum(axis=1)
     df = df.drop(columns=ct_list)
 
@@ -180,7 +179,7 @@ def computeEmbedding(round):
     df['nt_sum2'] = df[nt_num_list].sum(axis=1)
     df = df.drop(columns=nt_num_list)
 
-    task_list = ['t0', 't1', 't2']
+    task_list = ['t1', 't2']
     df['t_sum'] = df[task_list].sum(axis=1)
     df = df.drop(columns=task_list)
 
@@ -200,7 +199,7 @@ def computeEmbedding(round):
 
 
 if __name__ == "__main__":
-    round = 1
+    round = 6
     feature = computeEmbedding(round)
     print(feature)
     # feature = torch.round(feature, decimals=7)
